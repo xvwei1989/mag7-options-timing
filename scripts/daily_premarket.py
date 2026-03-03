@@ -28,7 +28,7 @@ def run(universe: str = "mag7", period: str = "2y") -> dict:
             all_items.extend(fetch_rss(url))
         except Exception:
             continue
-    score, top = macro_risk_score(all_items)
+    total_score, components, top = macro_risk_score(all_items)
 
     signals = []
     for t in tickers:
@@ -36,13 +36,14 @@ def run(universe: str = "mag7", period: str = "2y") -> dict:
         sig = generate_signal(t, hist)
         if not sig:
             continue
-        sig2 = apply_macro_overlay(sig, score)
+        sig2 = apply_macro_overlay(sig, total_score, components)
         signals.append(sig2)
 
     out = {
         "asof": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "universe": universe,
-        "macro_score": score,
+        "macro_score": total_score,
+        "macro_components": components,
         "macro_top": [{"title": h.title, "link": h.link, "published": h.published} for h in top],
         "signals": [s.__dict__ for s in signals],
     }
