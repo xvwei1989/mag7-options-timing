@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable
+from email.utils import parsedate_to_datetime
 
 import requests
 
@@ -38,6 +40,32 @@ def fetch_rss(url: str, timeout: int = 12) -> list[MacroHeadline]:
         if title:
             items.append(MacroHeadline(title=title, link=link, published=pub))
     return items
+
+
+def _age_hours(pub: str | None) -> float | None:
+    if not pub:
+        return None
+    try:
+        dt = parsedate_to_datetime(pub)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return (now - dt.astimezone(timezone.utc)).total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
+def freshness_weight(pub: str | None, half_life_hours: float = 48.0, floor: float = 0.25) -> float:
+    """Exponential decay by age. 48h half-life by default.
+
+    Returns a multiplier in [floor, 1].
+    """
+    age = _age_hours(pub)
+    if age is None:
+        return 1.0
+    # w = 0.5^(age/half_life)
+    w = math.pow(0.5, age / half_life_hours)
+    return max(floor, min(1.0, w))
 
 
 CATEGORIES: dict[str, dict[str, int]] = {
@@ -107,23 +135,27 @@ def macro_risk_score(
 ) -> tuple[int, dict[str, int], list[MacroHeadline]]:
     """Return: (total_score, component_scores, top_headlines)
 
-    - total_score: sum across categories
-    - component_scores: per-category sum
-    - top_headlines: most risk-relevant headlines (any category)
+    Adds a *freshness weight* so newer headlines matter more.
     """
 
     hs = list(headlines)[:max_items]
-    total = 0
-    comps = {k: 0 for k in CATEGORIES.keys()}
-    scored: list[tuple[int, MacroHeadline]] = []
+    total_f = 0.0
+    comps_f = {k: 0.0 for k in CATEGORIES.keys()}
+    scored: list[tuple[float, MacroHeadline]] = []
 
     for h in hs:
+        w = freshness_weight(h.published)
         per = score_by_category(h.title)
-        s = sum(per.values())
-        total += s
+        s = float(sum(per.values()))
+        sw = s * w
+        total_f += sw
         for k, v in per.items():
-            comps[k] += v
-        scored.append((s, h))
+            comps_f[k] += float(v) * w
+        scored.append((sw, h))
+
+    # present as ints for stability
+    total = int(round(total_f))
+    comps = {k: int(round(v)) for k, v in comps_f.items()}
 
     top = [h for s, h in sorted(scored, key=lambda p: -p[0]) if s > 0][:8]
     return total, comps, top
