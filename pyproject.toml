@@ -1,0 +1,8 @@
+[project]
+name = "mag7opts"
+version = "0.1.0"
+description = "MAG7 options timing research framework"
+requires-python = ">=3.10"
+
+[project.scripts]
+mag7opts = "mag7opts.cli:main"
