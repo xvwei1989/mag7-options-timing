@@ -33,11 +33,25 @@ def run(universe: str = "mag7", period: str = "2y") -> dict:
     signals = []
     for t in tickers:
         hist = ds.history(t, period=period)
-        sig = generate_signal(t, hist)
-        if not sig:
+        base = generate_signal(t, hist)
+        if not base:
             continue
-        sig2 = apply_macro_overlay(sig, total_score, components)
-        signals.append(sig2)
+        final, overlay = apply_macro_overlay(base, total_score, components)
+        signals.append({
+            "ticker": final.ticker,
+            "asof": final.asof,
+            "spot": final.spot,
+            "regime": final.regime,
+            "rsi14": final.rsi14,
+            "action": final.action,
+            "structure": final.structure,
+            "expiration": final.expiration,
+            "strike": final.strike,
+            "rationale": final.rationale,
+            "base_action": base.action,
+            "base_structure": base.structure,
+            "overlay": overlay,
+        })
 
     out = {
         "asof": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -45,7 +59,7 @@ def run(universe: str = "mag7", period: str = "2y") -> dict:
         "macro_score": total_score,
         "macro_components": components,
         "macro_top": [{"title": h.title, "link": h.link, "published": h.published} for h in top],
-        "signals": [s.__dict__ for s in signals],
+        "signals": signals,
     }
     return out
 
