@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 import typer
@@ -10,7 +10,7 @@ from rich.table import Table
 
 from .data_sources.yahoo import YahooDataSource, resolve_universe
 from .options.selectors import pick_cc, pick_csp
-from .strategies.regime_rsi import generate_signal
+from .strategies.regime_rsi import Signal, generate_signal
 
 app = typer.Typer(add_completion=False, help="MAG7 options timing research CLI")
 console = Console()
@@ -21,16 +21,8 @@ def _root():
     """Quant options timing utilities."""
 
 
-@app.command("signals")
-def signals_cmd(
-    universe: str = typer.Option("mag7", help="Universe: mag7 or comma-separated tickers"),
-    period: str = typer.Option("2y", help="History lookback period (yfinance)")
-):
-    """Generate today-style timing signals for the selected universe."""
-    ds = YahooDataSource()
-    tickers = resolve_universe(universe)
-
-    rows = []
+def _compute_signals(ds: YahooDataSource, tickers: list[str], period: str) -> list[Signal]:
+    rows: list[Signal] = []
     for t in tickers:
         hist = ds.history(t, period=period)
         sig = generate_signal(t, hist)
@@ -41,10 +33,8 @@ def signals_cmd(
         try:
             spot = sig.spot
             expirations = ds.option_expirations(t)
-            # choose an expiration roughly 21-45 days out
             exp_pick = None
             for exp in expirations:
-                # exp format: YYYY-MM-DD
                 dte = (pd.to_datetime(exp).date() - date.today()).days
                 if 21 <= dte <= 45:
                     exp_pick = exp
@@ -57,14 +47,33 @@ def signals_cmd(
                 chain["expiration"] = exp_pick
                 opt = pick_csp(chain, spot) if sig.structure == "CSP" else pick_cc(chain, spot)
                 if opt:
-                    sig = sig.__class__(
-                        **{**sig.__dict__, "expiration": exp_pick, "strike": opt.strike}
-                    )
+                    sig = sig.__class__(**{**sig.__dict__, "expiration": exp_pick, "strike": opt.strike})
         except Exception:
             pass
 
         rows.append(sig)
+    return rows
 
+
+def _signals_to_frame(rows: list[Signal]) -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "ticker": s.ticker,
+            "asof": s.asof,
+            "spot": s.spot,
+            "regime": s.regime,
+            "rsi14": s.rsi14,
+            "action": s.action,
+            "structure": s.structure,
+            "expiration": s.expiration,
+            "strike": s.strike,
+            "rationale": s.rationale,
+        }
+        for s in rows
+    ])
+
+
+def _print_table(rows: list[Signal]) -> None:
     table = Table(title="MAG7 Options Timing Signals")
     table.add_column("Ticker")
     table.add_column("AsOf")
@@ -78,9 +87,59 @@ def signals_cmd(
     for s in rows:
         exp = s.expiration or "—"
         strike = f"{s.strike:.2f}" if s.strike is not None else "—"
-        table.add_row(s.ticker, s.asof, f"{s.spot:.2f}", s.regime, f"{s.rsi14:.1f}", s.action, s.structure, exp, strike)
-
+        table.add_row(
+            s.ticker,
+            s.asof,
+            f"{s.spot:.2f}",
+            s.regime,
+            f"{s.rsi14:.1f}",
+            s.action,
+            s.structure,
+            exp,
+            strike,
+        )
     console.print(table)
+
+
+@app.command("signals")
+def signals_cmd(
+    universe: str = typer.Option("mag7", help="Universe: mag7 or comma-separated tickers"),
+    period: str = typer.Option("2y", help="History lookback period (yfinance)"),
+):
+    """Print daily timing signals to the terminal."""
+    ds = YahooDataSource()
+    tickers = resolve_universe(universe)
+    rows = _compute_signals(ds, tickers, period)
+    _print_table(rows)
+
+
+@app.command("export")
+def export_cmd(
+    universe: str = typer.Option("mag7", help="Universe: mag7 or comma-separated tickers"),
+    period: str = typer.Option("2y", help="History lookback period (yfinance)"),
+    out_dir: Path = typer.Option(Path("outputs"), help="Output directory"),
+    fmt: str = typer.Option("csv", help="csv|json"),
+):
+    """Generate daily signals and export to outputs/ as CSV or JSON."""
+    ds = YahooDataSource()
+    tickers = resolve_universe(universe)
+    rows = _compute_signals(ds, tickers, period)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df = _signals_to_frame(rows)
+
+    stamp = datetime.now().strftime("%Y%m%d")
+    fmt = fmt.lower().strip()
+    if fmt not in ("csv", "json"):
+        raise typer.BadParameter("fmt must be csv or json")
+
+    out_path = out_dir / f"signals_{universe}_{stamp}.{fmt}"
+    if fmt == "csv":
+        df.to_csv(out_path, index=False)
+    else:
+        df.to_json(out_path, orient="records", indent=2)
+
+    console.print(f"✅ wrote {len(df)} rows -> {out_path}")
 
 
 def main():

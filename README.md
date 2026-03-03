@@ -29,8 +29,12 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Example: generate signals for all MAG7
-python -m mag7opts signals --universe mag7 --asof today
+# Print daily signals (terminal)
+python -m mag7opts signals --universe mag7 --period 2y
+
+# Export signals (daily run output) to outputs/
+python -m mag7opts export --universe mag7 --period 2y --fmt csv
+python -m mag7opts export --universe META,NVDA --period 2y --fmt json
 ```
 
 ---
